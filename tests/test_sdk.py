@@ -168,6 +168,48 @@ class TestWattTimeBase(unittest.TestCase):
         base.session.close()
 
 
+class TestGetChunks(unittest.TestCase):
+    """Unit tests for WattTimeBase._get_chunks, which splits a time range into
+    API-sized chunks. This is pure date math, so no API credentials are needed."""
+
+    def setUp(self):
+        self.base = WattTimeBase()
+
+    def tearDown(self):
+        self.base.session.close()
+
+    def test_single_chunk_when_range_smaller_than_chunk_size(self):
+        # A range shorter than the chunk size stays as one unchanged chunk.
+        start = datetime(2025, 1, 1, tzinfo=UTC)
+        end = datetime(2025, 1, 15, tzinfo=UTC)
+        chunks = self.base._get_chunks(start, end)
+        self.assertEqual(chunks, [(start, end)])
+
+    def test_multiple_chunks_are_contiguous_and_cover_full_range(self):
+        # A 65-day range splits into three chunks of at most 30 days each.
+        start = datetime(2025, 1, 1, tzinfo=UTC)
+        end = datetime(2025, 3, 7, tzinfo=UTC)
+        chunks = self.base._get_chunks(start, end)
+
+        self.assertEqual(len(chunks), 3)
+        # First chunk starts at start; last chunk ends exactly at end.
+        self.assertEqual(chunks[0][0], start)
+        self.assertEqual(chunks[-1][1], end)
+        # Every chunk except the last has its end pulled back 5 minutes so the
+        # inclusive API responses do not overlap. The next chunk then starts
+        # 5 minutes after the previous chunk's trimmed end.
+        for (_, this_end), (next_start, _) in zip(chunks, chunks[1:]):
+            self.assertEqual(next_start - this_end, timedelta(minutes=5))
+
+    def test_custom_chunk_size_produces_more_chunks(self):
+        # A smaller chunk_size splits the same range into more chunks.
+        start = datetime(2025, 1, 1, tzinfo=UTC)
+        end = datetime(2025, 1, 4, tzinfo=UTC)
+        chunks = self.base._get_chunks(start, end, chunk_size=timedelta(days=1))
+        self.assertEqual(len(chunks), 3)
+        self.assertEqual(chunks[-1][1], end)
+
+
 class TestWattTimeHistorical(unittest.TestCase):
     def setUp(self):
         self.historical = WattTimeHistorical(rate_limit=1)
