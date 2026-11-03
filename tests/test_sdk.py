@@ -152,6 +152,33 @@ class TestWattTimeBase(unittest.TestCase):
         self.assertIsInstance(parsed_end, datetime)
         self.assertEqual(parsed_end.tzinfo, UTC)
 
+    def test_get_chunks_splits_long_span(self):
+        start = datetime(2025, 1, 1, tzinfo=UTC)
+        end = datetime(2025, 3, 1, tzinfo=UTC)
+
+        chunks = self.base._get_chunks(start, end)
+
+        self.assertEqual(len(chunks), 2)
+        self.assertEqual(chunks[0][0], start)
+        self.assertEqual(chunks[-1][1], end)
+        # API response is inclusive, so chunks must not overlap
+        self.assertEqual(chunks[1][0] - chunks[0][1], timedelta(minutes=5))
+
+    def test_get_chunks_zero_length_span(self):
+        # Requesting a single instant is valid; the API accepts start == end.
+        start = datetime(2025, 1, 15, 6, tzinfo=UTC)
+
+        chunks = self.base._get_chunks(start, start)
+
+        self.assertEqual(chunks, [(start, start)])
+
+    def test_get_chunks_rejects_inverted_span(self):
+        start = datetime(2025, 1, 15, 6, tzinfo=UTC)
+        end = datetime(2025, 1, 14, 6, tzinfo=UTC)
+
+        with self.assertRaises(ValueError):
+            self.base._get_chunks(start, end)
+
     @mock.patch("watttime.requests.Session.post", side_effect=mocked_register)
     def test_mock_register(self, mock_post):
         resp = self.base.register(email=os.getenv("WATTTIME_EMAIL"))
@@ -483,6 +510,16 @@ class TestWattTimeForecast(unittest.TestCase):
         self.assertIn("value", df.columns)
         self.assertIn("generated_at", df.columns)
 
+    def test_historical_forecast_pandas_single_instant(self):
+        # start == end asks for the one forecast run generated at that instant.
+        generated_at = "2025-01-15 06:00Z"
+        df = self.forecast.get_historical_forecast_pandas(
+            generated_at, generated_at, region=REGION
+        )
+        self.assertIsInstance(df, pd.DataFrame)
+        self.assertEqual(df["generated_at"].nunique(), 1)
+        self.assertEqual(parse(generated_at), df["generated_at"].iloc[0])
+
     def test_historical_forecast_pandas_list(self):
         """
         Test the new method get_historical_forecast_pandas_list which accepts a list of dates.
@@ -583,6 +620,9 @@ class TestWattTimeMaps(unittest.TestCase):
         self.assertEqual(region["region_full_name"], "Public Service Co of Colorado")
         self.assertEqual(region["signal_type"], "co2_moer")
 
+    @unittest.skip(
+        "UK/NIE regions are in release-candidate state; revert after 2026-10-28."
+    )
     def test_my_access_in_geojson(self):
         access = self.myaccess.get_access_pandas()
         for signal_type in ["co2_moer", "co2_aoer", "health_damage"]:
